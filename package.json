@@ -1,0 +1,21 @@
+{
+    "name": "jira-rag",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "nodemon index.js"
+    },
+    "dependencies": {
+        "@huggingface/transformers": "^3.8.1",
+        "@pinecone-database/pinecone": "^6.1.3",
+        "dotenv": "^17.2.3",
+        "groq-sdk": "^0.37.0",
+        "mongoose": "^9.0.1",
+        "node-fetch": "^3.3.2"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.1"
+    }
+}
