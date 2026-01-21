@@ -9,7 +9,7 @@ export async function askGroq(question, contextChunks, options = {}) {
     const messages = [
         { 
             role: "system", 
-            content: options.systemPrompt || "You are a helpful assistant. Use the provided context to answer the question." 
+            content: options.systemPrompt || "You are an AI assistant that provides accurate and concise answers based on the provided context. Avoid adding any information not present in the context."
         },
         { 
             role: "user", 
@@ -25,4 +25,11 @@ export async function askGroq(question, contextChunks, options = {}) {
     });
 
     return response.choices[0].message.content; 
+}
+
+export function processGroqResponse(response) {
+    if (typeof response === "string") {
+        return response.trim();
+    }
+    return response;
 }
