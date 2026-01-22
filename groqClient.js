@@ -1,15 +1,18 @@
 import Groq from "groq-sdk";
+import { SYSTEM_PROMPTS } from "./groqPrompt.js";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
 export async function askGroq(question, contextChunks, options = {}) {
     const model = options.model || "llama-3.3-70b-versatile";
     const context = contextChunks.join('\n---\n');
     
+    const basePrompt = options.systemPrompt || SYSTEM_PROMPTS.JIRA_ASSISTANT;
+    const dynamicPrompt = basePrompt.replace(/{{TARGET}}/g, question);
+
     const messages = [
         { 
             role: "system", 
-            content: options.systemPrompt || "You are an AI assistant that provides accurate and concise answers based on the provided context. Avoid adding any information not present in the context."
+            content: dynamicPrompt 
         },
         { 
             role: "user", 
@@ -20,7 +23,7 @@ export async function askGroq(question, contextChunks, options = {}) {
     const response = await groq.chat.completions.create({
         messages,
         model,
-        temperature: options.temperature || 0.2,
+        temperature: options.temperature ?? 0, 
         max_tokens: options.maxTokens || 1024,
     });
 

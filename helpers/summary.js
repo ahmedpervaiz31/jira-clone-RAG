@@ -1,0 +1,22 @@
+import Board from '../../jira-backend/models/Board.model.js';
+import Task from '../../jira-backend/models/Task.model.js';
+import User from '../../jira-backend/models/User.model.js';
+
+export async function upsertGlobalSummary(index, performUpsert) {
+    const [boards, tasks, users] = await Promise.all([
+        Board.find().lean(),
+        Task.find().lean(),
+        User.find().lean()
+    ]);
+    const summaryText = `Boards: ${boards.length}. Tasks: ${tasks.length}. Users: ${users.length}.
+                        Board names: ${boards.map(b => b.name).join(', ')}
+                        Usernames: ${users.map(u => u.username).join(', ')}`;
+    await performUpsert('summary', 'global', summaryText, {
+        type: 'summary',
+        boardCount: boards.length,
+        taskCount: tasks.length,
+        userCount: users.length,
+        boardNames: boards.map(b => b.name),
+        userNames: users.map(u => u.username)
+    });
+}
