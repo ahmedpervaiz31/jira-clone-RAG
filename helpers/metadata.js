@@ -5,10 +5,12 @@ export function boardMeta(board, boardTasks = []) {
         done: boardTasks.filter(t => t.status === 'done').length
     };
     const titles = boardTasks.map(t => t.title).slice(0, 10);
+    
     return {
         name: board.name,
         key: board.key,
         flag: board.flag,
+        mongoId: board._id?.toString() || '', 
         members: board.members?.map(id => id.toString()) || [],
         tasks: board.tasks?.map(id => id.toString()) || [],
         taskCount: boardTasks.length,
@@ -25,11 +27,12 @@ export function taskMeta(task, boardName = 'Unknown') {
         status: task.status ?? '',
         assignedTo: task.assignedTo ?? '',
         boardName: boardName ?? '',
-        boardId: task.boardId?.toString() ?? '',
+        boardId: task.boardId?.toString() ?? '', 
+        mongoId: task._id?.toString() || '',
         description: task.description ?? '',
-        dueDate: (task.dueDate !== null && task.dueDate !== undefined) ? String(task.dueDate) : '',
-        createdAt: (task.createdAt !== null && task.createdAt !== undefined) ? String(task.createdAt) : '',
-        order: typeof task.order === 'number' ? task.order : 0,
+        dueDate: task.dueDate ? String(task.dueDate) : '',
+        createdAt: task.createdAt ? String(task.createdAt) : '',
+        order: task.order ?? '',
         displayId: task.displayId ?? '',
         dependencies: Array.isArray(task.dependencies) ? task.dependencies.map(id => id.toString()) : []
     };
@@ -38,6 +41,7 @@ export function taskMeta(task, boardName = 'Unknown') {
 export function userMeta(user, taskCount = 0) {
     return {
         username: user.username,
+        mongoId: user._id?.toString() || '',
         workload: taskCount
     };
 }
@@ -73,9 +77,10 @@ export function parseMetadata(metadata) {
 export function formatPineconeMetadata(type, entity, extra = {}) {
     const data = entity.toObject ? entity.toObject() : entity;
     let metadata = extractMetadata(type, data, extra);
+    
     return {
         type,
-        id: data._id.toString(),
+        mongoId: data._id?.toString() || '',
         ...metadata
     };
 }
