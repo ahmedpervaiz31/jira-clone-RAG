@@ -13,14 +13,17 @@ export async function askGroq(question, contextChunks, options = {}) {
         .replace(/{{TARGET}}/g, question)
         .replace(/{{ACTIVE_BOARD_NAME}}/g, activeBoardName);
 
+    const history = options.history || [];
+
     const messages = [
         { 
             role: "system", 
             content: dynamicPrompt 
         },
+        ...history.slice(-3), 
         { 
             role: "user", 
-            content: `Context:\n${context}\n\nQuestion: ${question}` 
+            content: `Context for reference:\n${context}\n\nActual User Question: ${question}` 
         }
     ];
 
