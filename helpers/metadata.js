@@ -5,13 +5,13 @@ export function boardMeta(board, boardTasks = []) {
         done: boardTasks.filter(t => t.status === 'done').length
     };
     const titles = boardTasks.map(t => t.title).slice(0, 10);
-    
+
     return {
         name: board.name,
         key: board.key,
         flag: board.flag,
         mongoId: board._id?.toString() || '',
-        boardId: board._id?.toString() || '', 
+        boardId: board._id?.toString() || '',
         members: board.members?.map(id => id.toString()) || [],
         tasks: board.tasks?.map(id => id.toString()) || [],
         taskCount: boardTasks.length,
@@ -28,10 +28,11 @@ export function taskMeta(task, boardName = 'Unknown') {
         status: task.status ?? '',
         assignedTo: task.assignedTo ?? '',
         boardName: boardName ?? '',
-        boardId: task.boardId?.toString() ?? '', 
+        boardId: task.boardId?.toString() ?? '',
         mongoId: task._id?.toString() || '',
         description: task.description ?? '',
         dueDate: task.dueDate ? String(task.dueDate) : '',
+        dueDateTimestamp: task.dueDate ? Math.floor(new Date(task.dueDate).getTime() / 1000) : 0,
         createdAt: task.createdAt ? String(task.createdAt) : '',
         order: task.order ?? '',
         displayId: task.displayId ?? '',
@@ -78,7 +79,7 @@ export function parseMetadata(metadata) {
 export function formatPineconeMetadata(type, entity, extra = {}) {
     const data = entity.toObject ? entity.toObject() : entity;
     let metadata = extractMetadata(type, data, extra);
-    
+
     return {
         type,
         mongoId: data._id?.toString() || '',

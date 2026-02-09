@@ -1,93 +1,137 @@
-import Task from '../jira-backend/models/Task.model.js';
-import Board from '../jira-backend/models/Board.model.js';
-import User from '../jira-backend/models/User.model.js';
 import { getEmbedding } from './embedder.js';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { condenseQuery } from './helpers/queryCondenser.js';
-import { getSearchContext, buildPineconeFilter, collectSearchIds, buildBoardSummaries, getGlobalSummary } from './helpers/searchHelpers.js';
+import { buildPineconeFilter, retrieveBoard, retrieveTask, retrieveUser } from './helpers/retrievalHelpers.js';
+import { getGlobalSummary, getBoardSummary } from './helpers/summaryHelpers.js';
 
 const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
-export async function ragSearch(query, userId, activeBoardId = null, topK = 10, history = []) {
+export async function ragSearch(query, activeBoardId = null, topK = 10, history = [], activeBoardName = null) {
     try {
         const index = pc.index(process.env.PINECONE_INDEX_NAME);
-        const currentDate = new Date().toISOString(); 
+        const currentDate = new Date().toISOString();
 
-        const condensed = await condenseQuery(history, query, currentDate);
-
+        const condensed = await condenseQuery(history, query, currentDate, activeBoardName);
         const { standalone_query, intent, filters } = condensed;
-        const { effectiveBoardId, allowedIds } = await getSearchContext(standalone_query, userId, activeBoardId, filters);        
-        
-        const embedding = await getEmbedding(standalone_query, true); 
+        const embedding = await getEmbedding(standalone_query, true);
 
-        const { matches } = await index.query({ 
-            vector: embedding, 
-            topK, 
-            includeMetadata: true,
-            filter: buildPineconeFilter(effectiveBoardId, allowedIds, filters) 
-        });
-
-        let boardSummaries = buildBoardSummaries(matches); 
-        let globalSummaryText = getGlobalSummary(matches, effectiveBoardId);
-
-        if (!globalSummaryText && (intent === 'GLOBAL_SUMMARY' || query.toLowerCase().includes('all boards'))) {
-            const directFetch = await index.fetch(['summary-global']); 
-            globalSummaryText = directFetch.records?.['summary-global']?.metadata?.textChunk || "";
+        let effectiveTopK = topK;
+        if (intent === 'ANALYTICAL_LIST' || filters.dueDateStart || filters.dueDateEnd) {
+            effectiveTopK = 50;
         }
 
-        if (intent === 'SPECIFIC_ENTITY' && filters?.boardId) {
-            if (boardSummaries.length === 0) {
-                const boardSumId = `board-SUMMARY-${filters.boardId}`;
-                const directBoardFetch = await index.fetch([boardSumId]);
-                if (directBoardFetch.records?.[boardSumId]) {
-                    boardSummaries = buildBoardSummaries([directBoardFetch.records[boardSumId]]);
-                }
-            }
+        const queryOptions = {
+            vector: embedding,
+            topK: effectiveTopK,
+            includeMetadata: true
+        };
 
-            let boards = [];
-            const isObjectId = /^[a-f\d]{24}$/i.test(filters.boardId);
-            if (isObjectId) {
-                boards = await Board.find({ _id: filters.boardId }).select('name key flag members').lean();
-            } else {
-                boards = await Board.find({ key: filters.boardId }).select('name key flag members').lean();
+        const pineconeFilter = buildPineconeFilter(activeBoardId, filters);
+        if (pineconeFilter && Object.keys(pineconeFilter).length > 0) {
+            queryOptions.filter = pineconeFilter;
+        }
+
+        let { matches } = await index.query(queryOptions);
+
+        // relaxed retrieval 
+        if (matches.length === 0) {
+            const hasConstraints = (filters.boardName || filters.boardId || activeBoardId) || (filters.assignedTo || filters.dueDateStart || filters.dueDateEnd);
+
+            if (hasConstraints) {
+                if (filters.assignedTo) {
+                    const relaxedFilters = { ...filters };
+                    delete relaxedFilters.assignedTo;
+                    const relaxedFilter = buildPineconeFilter(activeBoardId, relaxedFilters);
+
+                    if (relaxedFilter && Object.keys(relaxedFilter).length > 0) {
+                        const relaxedOptions = { ...queryOptions, filter: relaxedFilter };
+                        const relaxedResults = await index.query(relaxedOptions);
+                        matches = relaxedResults.matches;
+                    }
+                }
+
+                // semantic retrieval
+                if (matches.length === 0) {
+                    const fallbackOptions = {
+                        ...queryOptions,
+                        topK: 20
+                    };
+                    delete fallbackOptions.filter;
+                    const fallback = await index.query(fallbackOptions);
+                    matches = fallback.matches;
+                }
+            } else if (intent === 'SPECIFIC_BOARD' || intent === 'SPECIFIC_TASK') {
+                delete queryOptions.filter;
+                queryOptions.topK = 20;
+                const fallback = await index.query(queryOptions);
+                matches = fallback.matches;
             }
+        }
+
+        const { boards } = retrieveBoard(matches);
+        const { tasks } = retrieveTask(matches);
+        const { users } = retrieveUser(matches);
+        const boardSummaryText = await getBoardSummary(index, matches, activeBoardId, filters);
+        let globalSummaryText = await getGlobalSummary(index, matches, intent, query);
+
+        if (matches.length >= effectiveTopK) {
+            const warning = `(Note: Search limited to top ${effectiveTopK} results. More items may exist concurrently.)`;
+            globalSummaryText = globalSummaryText ? `${globalSummaryText}\n${warning}` : warning;
+        }
+
+        if (intent === 'GLOBAL_SUMMARY' && globalSummaryText) {
             return {
-                boards,
+                boards: [],
                 tasks: [],
                 users: [],
-                boardSummaries,
+                boardSummaryText: '',
                 globalSummaryText,
                 searchQueryUsed: standalone_query
             };
         }
 
-        if (intent === 'GLOBAL_SUMMARY' && globalSummaryText) {
-            return { 
-                boards: [], tasks: [], users: [], 
-                boardSummaries: [], globalSummaryText, 
-                searchQueryUsed: standalone_query 
+        if (intent === 'SPECIFIC_BOARD' && boardSummaryText) {
+            return {
+                boards,
+                tasks: [],
+                users: [],
+                boardSummaryText,
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
             };
         }
 
-        const ids = await collectSearchIds(matches, allowedIds, intent, filters);
-        const [tasks, initialUsers] = await Promise.all([
-            Task.find({ _id: { $in: ids.task } }).select('title status assignedTo boardId description dueDate').lean(),
-            User.find({ _id: { $in: ids.user } }).select('username').lean()
-        ]);
-
-        const allUsernames = [...new Set([...initialUsers.map(u => u.username), ...tasks.map(t => t.assignedTo).filter(Boolean)])];
-        const users = await User.find({ username: { $in: allUsernames } }).select('username').lean();
-
-        const allBoardIds = [...new Set([...ids.board, ...tasks.map(t => t.boardId.toString())])];
-        const boards = await Board.find({ _id: { $in: allBoardIds } }).select('name key flag members').lean();
-
-        return { 
-            boards, 
-            tasks, 
-            users, 
-            boardSummaries,
-            globalSummaryText, 
-            searchQueryUsed: standalone_query 
+        if (intent === 'SPECIFIC_TASK') {
+            const taskTitles = tasks.map(t => t.title.toLowerCase());
+            const specificTasks = tasks.filter(t => taskTitles.includes(standalone_query.toLowerCase()));
+            return {
+                boards: [],
+                tasks: specificTasks,
+                users: [],
+                boardSummaryText: '',
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
+            };
+        }
+        if (intent === 'SPECIFIC_USER') {
+            const usernames = users.map(u => u.username.toLowerCase());
+            const specificUsers = users.filter(u => usernames.includes(standalone_query.toLowerCase()));
+            return {
+                boards: [],
+                tasks: [],
+                users: specificUsers,
+                boardSummaryText: '',
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
+            };
+        }
+        return {
+            boards,
+            tasks,
+            users,
+            boardSummaryText,
+            globalSummaryText,
+            searchQueryUsed: standalone_query
         };
     } catch (err) {
         throw new Error(`RAG search failed: ${err.message}`);

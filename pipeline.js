@@ -5,7 +5,7 @@ import { Pinecone } from '@pinecone-database/pinecone';
 
 import { chunkBoard, chunkTask, chunkUser } from './helpers/chunker.js';
 import { extractMetadata } from './helpers/metadata.js';
-import { upsertGlobalSummary } from './helpers/summary.js';
+import { upsertBoardSummaries, upsertGlobalSummary } from './helpers/summaryHelpers.js';
 import { getEmbedding } from './embedder.js';
 
 const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
@@ -18,15 +18,19 @@ export async function batchIndexer() {
         User.find().lean()
     ]);
 
-    const boardMap = Object.fromEntries(boards.map(b => [b._id.toString(), b.name]));
-    
+    if (!boards.length && !tasks.length && !users.length) {
+        return;
+    }
+
+    const boardMap = Object.fromEntries(boards.map(b => [b && b._id ? b._id.toString() : '', b.name]));
+
     const userWorkloads = tasks.reduce((acc, t) => {
         if (t.assignedTo) acc[t.assignedTo] = (acc[t.assignedTo] || 0) + 1;
         return acc;
     }, {});
 
     const boardTasksMap = tasks.reduce((acc, t) => {
-        const bId = t.boardId?.toString();
+        const bId = t && t.boardId ? t.boardId.toString() : '';
         if (bId) {
             if (!acc[bId]) acc[bId] = [];
             acc[bId].push(t);
@@ -35,48 +39,51 @@ export async function batchIndexer() {
     }, {});
 
     for (const b of boards) {
-        const bTasks = boardTasksMap[b._id.toString()] || [];
+        const bId = b && b._id ? b._id.toString() : '';
+        const bTasks = boardTasksMap[bId] || [];
         const boardMetaData = extractMetadata('board', b, { boardTasks: bTasks });
-        await performUpsert('board', b._id, chunkBoard(b), boardMetaData);
+        await performUpsert('board', bId, chunkBoard(b), boardMetaData);
     }
 
     for (const t of tasks) {
-        const bName = boardMap[t.boardId?.toString()] || 'Unknown';
-        const taskMetaData = extractMetadata('task', t, { 
-            boardName: bName, 
-            boardId: t.boardId 
+        const tBoardId = t && t.boardId ? t.boardId.toString() : '';
+        const bName = boardMap[tBoardId] || 'Unknown';
+        const taskMetaData = extractMetadata('task', t, {
+            boardName: bName,
+            boardId: tBoardId
         });
-        await performUpsert('task', t._id, chunkTask(t, bName), taskMetaData);
+        await performUpsert('task', t && t._id ? t._id.toString() : '', chunkTask(t, bName), taskMetaData);
     }
 
     for (const u of users) {
-        const count = userWorkloads[u.username] || 0;
-        const userMetaData = extractMetadata('user', u, { 
+        const count = userWorkloads[u && u.username ? u.username : ''] || 0;
+        const userMetaData = extractMetadata('user', u, {
             taskCount: count,
-            username: u.username 
+            username: u && u.username ? u.username : ''
         });
-        await performUpsert('user', u._id, chunkUser(u, count), userMetaData);
+        await performUpsert('user', u && u._id ? u._id.toString() : '', chunkUser(u, count), userMetaData);
     }
-    
-    await upsertGlobalSummary(index, performUpsert, { boards, tasks, users });
+
+    await upsertGlobalSummary(performUpsert, { boards, tasks, users });
+    await upsertBoardSummaries(performUpsert, { boards, tasks, users });
 }
 
 async function performUpsert(type, id, text, metadata) {
     const embedding = await getEmbedding(text);
-    
+
     const pineconeMetadata = {
         type,
-        mongoId: id.toString(),
+        mongoId: id ? id.toString() : '',
         textChunk: text,
         ...metadata
     };
 
     if (type === 'board') {
-        pineconeMetadata.boardId = id.toString();
+        pineconeMetadata.boardId = id ? id.toString() : '';
     } else if (type === 'task' && metadata.boardId) {
-        pineconeMetadata.boardId = metadata.boardId.toString();
+        pineconeMetadata.boardId = metadata.boardId ? metadata.boardId.toString() : '';
     } else if (type === 'user') {
-        pineconeMetadata.username = metadata.username || id.toString();
+        pineconeMetadata.username = metadata.username || (id ? id.toString() : '');
     }
 
     await index.upsert([{
@@ -102,12 +109,12 @@ export async function syncToPinecone(type, entity) {
         metadata = extractMetadata('user', data, { taskCount, username: data.username });
     } else if (type === 'board') {
         const boardTasks = await Task.find({ boardId: data._id }).lean();
-        text = chunkBoard(data); 
+        text = chunkBoard(data, boardTasks);
         metadata = extractMetadata('board', data, { boardTasks });
     } else if (type === 'summary') {
         return await upsertGlobalSummary(index, performUpsert);
     }
-    
+
     await performUpsert(type, data._id, text, metadata);
 }
 
@@ -123,7 +130,7 @@ export async function upsertToIndex(type, entity) {
     try {
         let id = entity && (entity._id || entity.id);
         if (!id) throw new Error('Entity must have _id or id');
-        
+
         await syncToPinecone(type, entity);
         await upsertGlobalSummary(index, performUpsert);
     } catch (err) {
