@@ -11,11 +11,9 @@ export function buildSearchQuery(question, options = {}) {
 export function buildPineconeFilter(effectiveBoardId, filters = {}) {
     let baseFilter = {};
 
-    // Priority: Specific board filter > Active Board Context
     const targetBoardId = filters.boardId || effectiveBoardId;
 
     if (filters.boardName) {
-        // Simplified filter for testing
         baseFilter.boardName = { $eq: filters.boardName };
     } else if (targetBoardId) {
         baseFilter.boardId = { $eq: targetBoardId };
@@ -54,7 +52,6 @@ export function buildPineconeFilter(effectiveBoardId, filters = {}) {
 
     if (filters.dueDateStart || filters.dueDateEnd) {
         baseFilter.dueDateTimestamp = {};
-        // Add 1-day buffer (86400 seconds) to account for timezones
         if (filters.dueDateStart) {
             baseFilter.dueDateTimestamp['$gte'] = filters.dueDateStart - 86400;
         }

@@ -71,7 +71,6 @@ export async function getBoardSummary(index, matches, boardId, filters) {
     const targetBoardId = filters?.boardId || boardId;
     const targetBoardName = filters?.boardName;
 
-    // 1. Try finding summary in matches
     const matchedSummary = matches.find(m =>
         m.metadata && m.metadata.type === 'summary' &&
         (m.metadata.mongoId === targetBoardId || m.metadata.boardName === targetBoardName)
@@ -80,10 +79,6 @@ export async function getBoardSummary(index, matches, boardId, filters) {
     if (matchedSummary && matchedSummary.metadata.textChunk) {
         return matchedSummary.metadata.textChunk;
     }
-
-    // 2. Fallback: Direct Fetch (requires ID, name lookup not creating deterministic IDs unless we index by name)
-    // If we only have name, we can't easily fetch by ID directly unless we store map.
-    // However, for now, we rely on semantic search or ID if active.
 
     if (targetBoardId) {
         const boardSumId = `summary-${targetBoardId}`;
