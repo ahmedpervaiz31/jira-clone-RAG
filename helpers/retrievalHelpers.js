@@ -73,7 +73,10 @@ export function retrieveBoard(matches) {
         .map(m => m.metadata);
 
     return {
-        boards: boards.map(b => boardMeta(b, [])),
+        boards: boards.map(b => ({
+            ...boardMeta(b, []),
+            _id: b.mongoId || b.boardId || b._id
+        })),
     };
 }
 
@@ -84,7 +87,12 @@ export function retrieveTask(matches) {
         .filter(m => m.metadata && m.metadata.type === 'task')
         .map(m => m.metadata);
 
-    return { tasks: tasks.map(t => taskMeta(t, '')) };
+    return {
+        tasks: tasks.map(t => ({
+            ...taskMeta(t, ''),
+            _id: t.mongoId || t._id
+        }))
+    };
 }
 
 export function retrieveUser(matches) {
@@ -94,5 +102,10 @@ export function retrieveUser(matches) {
         .filter(m => m.metadata && m.metadata.type === 'user')
         .map(m => m.metadata);
 
-    return { users: users.map(u => userMeta(u, 0)) };
+    return {
+        users: users.map(u => ({
+            ...userMeta(u, 0),
+            _id: u.mongoId || u._id
+        }))
+    };
 }

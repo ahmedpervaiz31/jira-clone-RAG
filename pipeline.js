@@ -64,11 +64,11 @@ export async function batchIndexer() {
         await performUpsert('user', u && u._id ? u._id.toString() : '', chunkUser(u, count), userMetaData);
     }
 
-    await upsertGlobalSummary(performUpsert, { boards, tasks, users });
-    await upsertBoardSummaries(performUpsert, { boards, tasks, users });
+    await upsertGlobalSummary({ boards, tasks, users });
+    await upsertBoardSummaries({ boards, tasks, users });
 }
 
-async function performUpsert(type, id, text, metadata) {
+export async function performUpsert(type, id, text, metadata) {
     const embedding = await getEmbedding(text);
 
     const pineconeMetadata = {
@@ -84,6 +84,10 @@ async function performUpsert(type, id, text, metadata) {
         pineconeMetadata.boardId = metadata.boardId ? metadata.boardId.toString() : '';
     } else if (type === 'user') {
         pineconeMetadata.username = metadata.username || (id ? id.toString() : '');
+    } else if (type === 'summary') {
+        pineconeMetadata.mongoId = id || 'global';
+    } else {
+        throw new Error(`Unknown type for metadata enrichment: ${type}`);
     }
 
     await index.upsert([{
@@ -112,7 +116,10 @@ export async function syncToPinecone(type, entity) {
         text = chunkBoard(data, boardTasks);
         metadata = extractMetadata('board', data, { boardTasks });
     } else if (type === 'summary') {
-        return await upsertGlobalSummary(index, performUpsert);
+        return await upsertGlobalSummary(data);
+    }
+    else {
+        throw new Error(`Unknown type for Pinecone sync: ${type}`);
     }
 
     await performUpsert(type, data._id, text, metadata);
@@ -121,6 +128,14 @@ export async function syncToPinecone(type, entity) {
 export async function deleteFromIndex(type, id) {
     try {
         await index.deleteOne(`${type}-${id}`);
+        const [boards, tasks, users] = await Promise.all([
+            Board.find().lean(),
+            Task.find().lean(),
+            User.find().lean()
+        ]);
+        await upsertGlobalSummary({ boards, tasks, users });
+        await upsertBoardSummaries({ boards, tasks, users });
+
     } catch (err) {
         throw new Error(`Failed to delete ${type} with id ${id} from Pinecone: ${err.message}`);
     }
@@ -132,7 +147,13 @@ export async function upsertToIndex(type, entity) {
         if (!id) throw new Error('Entity must have _id or id');
 
         await syncToPinecone(type, entity);
-        await upsertGlobalSummary(index, performUpsert);
+        const [boards, tasks, users] = await Promise.all([
+            Board.find().lean(),
+            Task.find().lean(),
+            User.find().lean()
+        ]);
+        await upsertGlobalSummary({ boards, tasks, users });
+        await upsertBoardSummaries({ boards, tasks, users });
     } catch (err) {
         let id = entity && (entity._id || entity.id) || 'unknown';
         throw new Error(`Failed to upsert ${type} with id ${id} to Pinecone: ${err.message}`);
