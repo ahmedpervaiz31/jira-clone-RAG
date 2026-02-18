@@ -1,26 +1,24 @@
 import Groq from "groq-sdk";
 import { SYSTEM_PROMPTS } from "./groqPrompt.js";
+import { JIRA_TOOLS } from "../jira-backend/tools/definitions.js";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function askGroq(question, contextChunks, options = {}) {
     const model = options.model || "llama-3.3-70b-versatile";
-
     const context = contextChunks.join('\n---\n');
-
     const activeBoardName = options.activeBoardName || 'Global (All Boards)';
+
     let dynamicPrompt = (options.systemPrompt || SYSTEM_PROMPTS.JIRA_ASSISTANT)
         .replace(/{{TARGET}}/g, question)
+        .replace(/{{EXECUTION_LOG}}/g, options.executionLog || '')
         .replace(/{{ACTIVE_BOARD_NAME}}/g, activeBoardName)
         .replace(/{current_date}/g, options.currentDate || new Date().toISOString());
 
     const history = options.history || [];
 
     const messages = [
-        {
-            role: "system",
-            content: dynamicPrompt
-        },
+        { role: "system", content: dynamicPrompt },
         ...history.slice(-3),
         {
             role: "user",
@@ -28,14 +26,31 @@ export async function askGroq(question, contextChunks, options = {}) {
         }
     ];
 
+
     const response = await groq.chat.completions.create({
         messages,
         model,
+        tools: options.mode === "OPERATIONAL" ? JIRA_TOOLS : undefined,
+        tool_choice: "auto",
         temperature: options.temperature ?? 0,
         max_tokens: options.maxTokens || 1024,
     });
 
-    return response.choices[0].message.content;
+
+    const message = response.choices[0].message;
+
+    if (message.tool_calls) {
+        return {
+            type: "TOOL_CALL",
+            toolCalls: message.tool_calls,
+            rawMessage: message
+        };
+    }
+
+    return {
+        type: "TEXT",
+        content: message.content
+    };
 }
 
 export function processGroqResponse(response) {

@@ -12,11 +12,11 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
         const currentDate = new Date().toISOString();
 
         const condensed = await condenseQuery(history, query, currentDate, activeBoardName);
-        const { standalone_query, intent, filters } = condensed;
+        const { standalone_query, mode, intent, filters } = condensed;
         const embedding = await getEmbedding(standalone_query, true);
 
         let effectiveTopK = topK;
-        if (intent === 'ANALYTICAL_LIST' || filters.dueDateStart || filters.dueDateEnd) {
+        if (mode === 'OPERATIONAL' || intent === 'ANALYTICAL_LIST' || filters.dueDateStart || filters.dueDateEnd) {
             effectiveTopK = 50;
         }
 
@@ -71,6 +71,7 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
         const { boards } = retrieveBoard(matches);
         const { tasks } = retrieveTask(matches);
         const { users } = retrieveUser(matches);
+
         const boardSummaryText = await getBoardSummary(index, matches, activeBoardId, filters);
         let globalSummaryText = await getGlobalSummary(index, matches, intent, query);
 
@@ -79,8 +80,20 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
             globalSummaryText = globalSummaryText ? `${globalSummaryText}\n${warning}` : warning;
         }
 
+        if (mode === 'OPERATIONAL') {
+            return {
+                condensed,
+                boards,
+                tasks,
+                users,
+                boardSummaryText: "",
+                globalSummaryText: ""
+            };
+        }
+
         if (intent === 'GLOBAL_SUMMARY' && globalSummaryText) {
             return {
+                condensed,
                 boards: [],
                 tasks: [],
                 users: [],
@@ -91,8 +104,14 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
         }
 
         if (intent === 'SPECIFIC_BOARD' && boardSummaryText) {
+            const specificBoards = boards.filter(b =>
+                (filters.boardId && b._id === filters.boardId) ||
+                b.name.toLowerCase().includes(standalone_query.toLowerCase()) ||
+                standalone_query.toLowerCase().includes(b.name.toLowerCase())
+            );
             return {
-                boards,
+                condensed,
+                boards: specificBoards,
                 tasks: [],
                 users: [],
                 boardSummaryText,
@@ -102,9 +121,13 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
         }
 
         if (intent === 'SPECIFIC_TASK') {
-            const taskTitles = tasks.map(t => t.title.toLowerCase());
-            const specificTasks = tasks.filter(t => taskTitles.includes(standalone_query.toLowerCase()));
+            const specificTasks = tasks.filter(t =>
+                (filters.taskId && t.displayId === filters.taskId) ||
+                t.title.toLowerCase().includes(standalone_query.toLowerCase()) ||
+                standalone_query.toLowerCase().includes(t.title.toLowerCase())
+            );
             return {
+                condensed,
                 boards: [],
                 tasks: specificTasks,
                 users: [],
@@ -114,9 +137,13 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
             };
         }
         if (intent === 'SPECIFIC_USER') {
-            const usernames = users.map(u => u.username.toLowerCase());
-            const specificUsers = users.filter(u => usernames.includes(standalone_query.toLowerCase()));
+            const specificUsers = users.filter(u =>
+                (filters.userId && u._id === filters.userId) ||
+                u.username.toLowerCase().includes(standalone_query.toLowerCase()) ||
+                standalone_query.toLowerCase().includes(u.username.toLowerCase())
+            );
             return {
+                condensed,
                 boards: [],
                 tasks: [],
                 users: specificUsers,
@@ -126,6 +153,7 @@ export async function ragSearch(query, activeBoardId = null, topK = 10, history 
             };
         }
         return {
+            condensed,
             boards,
             tasks,
             users,

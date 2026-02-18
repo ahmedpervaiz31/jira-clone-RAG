@@ -1,8 +1,10 @@
-export async function upsertGlobalSummary(performUpsert, data) {
-    if (!data || !data.boards || !data.tasks || !data.users) throw new Error('Missing boards, tasks, or users data');
-    const boards = data.boards;
-    const tasks = data.tasks;
-    const users = data.users;
+import { performUpsert } from '../pipeline.js';
+
+export async function upsertGlobalSummary(data) {
+    if (!data) throw new Error('Missing summary data');
+    const boards = Array.isArray(data.boards) ? data.boards : [];
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const users = Array.isArray(data.users) ? data.users : [];
 
     const summaryText = `Boards: ${boards.length}. Tasks: ${tasks.length}. Users: ${users.length}. 
         Board names: ${boards.map(b => b.name).join(', ')}. 
@@ -19,11 +21,11 @@ export async function upsertGlobalSummary(performUpsert, data) {
     });
 }
 
-export async function upsertBoardSummaries(performUpsert, data) {
-    if (!data || !data.boards || !data.tasks || !data.users) throw new Error('Missing boards, tasks, or users data');
-    const boards = data.boards;
-    const tasks = data.tasks;
-    const users = data.users;
+export async function upsertBoardSummaries(data) {
+    if (!data) throw new Error('Missing board summary data');
+    const boards = Array.isArray(data.boards) ? data.boards : [];
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const users = Array.isArray(data.users) ? data.users : [];
 
     for (const board of boards) {
         const boardTasks = tasks.filter(t => t.boardId && board._id && t.boardId.toString() === board._id.toString());

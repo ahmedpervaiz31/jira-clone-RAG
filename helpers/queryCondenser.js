@@ -32,6 +32,7 @@ export async function condenseQuery(history, question, currentDate, activeBoardN
         const parsed = JSON.parse(cleanedContent);
 
         if (!parsed.filters) parsed.filters = {};
+        if (!parsed.mode) parsed.mode = "INFORMATIONAL";
 
         if (parsed.filters.dueDateStart) {
             const startTs = Math.floor(new Date(parsed.filters.dueDateStart).getTime() / 1000);
@@ -51,6 +52,7 @@ export async function condenseQuery(history, question, currentDate, activeBoardN
         console.error("Failed to parse LLM JSON, falling back to basic query:", err);
         return {
             standalone_query: question,
+            mode: "INFORMATIONAL",
             intent: "GLOBAL_SUMMARY",
             filters: {}
         };
