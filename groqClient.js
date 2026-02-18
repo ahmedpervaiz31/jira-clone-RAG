@@ -26,6 +26,7 @@ export async function askGroq(question, contextChunks, options = {}) {
         }
     ];
 
+
     const response = await groq.chat.completions.create({
         messages,
         model,
@@ -34,6 +35,7 @@ export async function askGroq(question, contextChunks, options = {}) {
         temperature: options.temperature ?? 0,
         max_tokens: options.maxTokens || 1024,
     });
+
 
     const message = response.choices[0].message;
 
