@@ -1,75 +1,139 @@
-import Task from '../jira-backend/models/Task.model.js';
-import Board from '../jira-backend/models/Board.model.js';
-import User from '../jira-backend/models/User.model.js';
 import { getEmbedding } from './embedder.js';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { condenseQuery } from './helpers/queryCondenser.js';
+import { buildPineconeFilter, retrieveBoard, retrieveTask, retrieveUser } from './helpers/retrievalHelpers.js';
+import { getGlobalSummary, getBoardSummary } from './helpers/summaryHelpers.js';
 
-export async function keywordSearch(query, userId) {
-    const regex = new RegExp(query, 'i');
-    
-	const boards = await Board.find({
-		$and: [
-			{
-				$or: [
-					{ flag: 'public' },
-					{ $and: [ { flag: 'private' }, { members: userId } ] }
-				]
-			},
-			{
-				$or: [
-					{ name: regex },
-					{ key: regex }
-				]
-			}
-		]
-	});
+const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
-	const boardIds = boards.map(b => b._id);
-	const tasks = await Task.find({
-		boardId: { $in: boardIds },
-		$or: [
-			{ title: regex },
-			{ description: regex },
-			{ assignedTo: regex }
-		]
-	});
+export async function ragSearch(query, activeBoardId = null, topK = 10, history = [], activeBoardName = null) {
+    try {
+        const index = pc.index(process.env.PINECONE_INDEX_NAME);
+        const currentDate = new Date().toISOString();
 
-    const users = await User.find({ username: regex });
+        const condensed = await condenseQuery(history, query, currentDate, activeBoardName);
+        const { standalone_query, intent, filters } = condensed;
+        const embedding = await getEmbedding(standalone_query, true);
 
-	return { boards, tasks, users };
-}
+        let effectiveTopK = topK;
+        if (intent === 'ANALYTICAL_LIST' || filters.dueDateStart || filters.dueDateEnd) {
+            effectiveTopK = 50;
+        }
 
-const pc = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY,
-});
+        const queryOptions = {
+            vector: embedding,
+            topK: effectiveTopK,
+            includeMetadata: true
+        };
 
-export async function semanticSearch(query, userId, topK = 5) {
-	const index = pc.index(process.env.PINECONE_INDEX_NAME);
-	const embedding = await getEmbedding(query);
-	
-	const results = await index.query({
-		vector: embedding,
-		topK,
-		includeMetadata: true,
-	});
+        const pineconeFilter = buildPineconeFilter(activeBoardId, filters);
+        if (pineconeFilter && Object.keys(pineconeFilter).length > 0) {
+            queryOptions.filter = pineconeFilter;
+        }
 
-	const accessibleBoards = await Board.find({
-		$or: [
-			{ flag: 'public' },
-			{ $and: [ { flag: 'private' }, { members: userId } ] }
-		]
-	});
+        let { matches } = await index.query(queryOptions);
 
-	const accessibleBoardIds = new Set(accessibleBoards.map(b => b._id.toString())); 
-	
-	const filtered = results.matches.filter(match => {
-		if (match.metadata.type === 'board') {
-			return accessibleBoardIds.has(match.metadata.boardId);
-		}
-		if (match.metadata.type === 'task') {
-			return accessibleBoardIds.has(match.metadata.boardId);
-		}
-		return true;
-	});
-	return filtered;
+        // relaxed retrieval 
+        if (matches.length === 0) {
+            const hasConstraints = (filters.boardName || filters.boardId || activeBoardId) || (filters.assignedTo || filters.dueDateStart || filters.dueDateEnd);
+
+            if (hasConstraints) {
+                if (filters.assignedTo) {
+                    const relaxedFilters = { ...filters };
+                    delete relaxedFilters.assignedTo;
+                    const relaxedFilter = buildPineconeFilter(activeBoardId, relaxedFilters);
+
+                    if (relaxedFilter && Object.keys(relaxedFilter).length > 0) {
+                        const relaxedOptions = { ...queryOptions, filter: relaxedFilter };
+                        const relaxedResults = await index.query(relaxedOptions);
+                        matches = relaxedResults.matches;
+                    }
+                }
+
+                // semantic retrieval
+                if (matches.length === 0) {
+                    const fallbackOptions = {
+                        ...queryOptions,
+                        topK: 20
+                    };
+                    delete fallbackOptions.filter;
+                    const fallback = await index.query(fallbackOptions);
+                    matches = fallback.matches;
+                }
+            } else if (intent === 'SPECIFIC_BOARD' || intent === 'SPECIFIC_TASK') {
+                delete queryOptions.filter;
+                queryOptions.topK = 20;
+                const fallback = await index.query(queryOptions);
+                matches = fallback.matches;
+            }
+        }
+
+        const { boards } = retrieveBoard(matches);
+        const { tasks } = retrieveTask(matches);
+        const { users } = retrieveUser(matches);
+        const boardSummaryText = await getBoardSummary(index, matches, activeBoardId, filters);
+        let globalSummaryText = await getGlobalSummary(index, matches, intent, query);
+
+        if (matches.length >= effectiveTopK) {
+            const warning = `(Note: Search limited to top ${effectiveTopK} results. More items may exist concurrently.)`;
+            globalSummaryText = globalSummaryText ? `${globalSummaryText}\n${warning}` : warning;
+        }
+
+        if (intent === 'GLOBAL_SUMMARY' && globalSummaryText) {
+            return {
+                boards: [],
+                tasks: [],
+                users: [],
+                boardSummaryText: '',
+                globalSummaryText,
+                searchQueryUsed: standalone_query
+            };
+        }
+
+        if (intent === 'SPECIFIC_BOARD' && boardSummaryText) {
+            return {
+                boards,
+                tasks: [],
+                users: [],
+                boardSummaryText,
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
+            };
+        }
+
+        if (intent === 'SPECIFIC_TASK') {
+            const taskTitles = tasks.map(t => t.title.toLowerCase());
+            const specificTasks = tasks.filter(t => taskTitles.includes(standalone_query.toLowerCase()));
+            return {
+                boards: [],
+                tasks: specificTasks,
+                users: [],
+                boardSummaryText: '',
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
+            };
+        }
+        if (intent === 'SPECIFIC_USER') {
+            const usernames = users.map(u => u.username.toLowerCase());
+            const specificUsers = users.filter(u => usernames.includes(standalone_query.toLowerCase()));
+            return {
+                boards: [],
+                tasks: [],
+                users: specificUsers,
+                boardSummaryText: '',
+                globalSummaryText: '',
+                searchQueryUsed: standalone_query
+            };
+        }
+        return {
+            boards,
+            tasks,
+            users,
+            boardSummaryText,
+            globalSummaryText,
+            searchQueryUsed: standalone_query
+        };
+    } catch (err) {
+        throw new Error(`RAG search failed: ${err.message}`);
+    }
 }
